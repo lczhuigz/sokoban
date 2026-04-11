@@ -11,6 +11,7 @@
       <div class="level-info">
         <span class="level-badge">第 {{ isPlayingCustom ? '自' + (customLevelIndex + 1) : currentLevel + 1 }} 关</span>
         <span class="level-name">{{ isPlayingCustom ? customLevels[customLevelIndex]?.name : currentLevelData?.name }}</span>
+        <span class="level-total" v-if="!isPlayingCustom">{{ currentLevel + 1 }}/{{ totalLevels }}</span>
       </div>
       <div class="stats">
         <div class="stat">
@@ -28,6 +29,11 @@
           <span class="stat-value">{{ boxesOnTarget }}/{{ boxCount }}</span>
           <span class="stat-label">完成</span>
         </div>
+        <div class="stat">
+          <span class="stat-icon">⏱</span>
+          <span class="stat-value">{{ formattedTime }}</span>
+          <span class="stat-label">用时</span>
+        </div>
       </div>
     </div>
 
@@ -37,7 +43,7 @@
         <div v-for="(row, y) in gameMap" :key="'row-' + y" class="row">
           <template v-for="(cell, x) in row" :key="'cell-' + y + '-' + x">
             <div
-              v-if="cell !== 0 || hasNonZeroNeighbor(y, x)"
+              v-if="cell !== 0 || visibleCells[y]?.[x]"
               :class="getCellClass(cell, y, x)"
               @click="showTutorial = false"
             >
@@ -47,52 +53,23 @@
           </template>
         </div>
       </div>
-
     </div>
 
-    <!-- 提示消息（非居中，顶部显示） -->
+    <!-- 提示消息 -->
     <transition name="fade">
       <div v-if="showMessage" class="game-message">
         {{ message }}
       </div>
     </transition>
 
-    <!-- 控制按钮 -->
-    <div class="controls">
-      <button class="btn btn-secondary" @click="undo" title="撤销 (Ctrl+Z)">
-        <span class="btn-icon">↩</span>
-        撤销
-      </button>
-      <button class="btn btn-secondary" @click="restartLevel" title="重新开始 (R)">
-        <span class="btn-icon">⟳</span>
-        重置
-      </button>
-      <button class="btn btn-primary" @click="showLevelSelect = true" title="关卡选择 (Esc)">
-        <span class="btn-icon">☰</span>
-        关卡
-      </button>
-      <button class="btn btn-secondary" @click="showLevelEditor = true" title="自定义关卡">
-        <span class="btn-icon">✚</span>
-        自定义
-      </button>
-      <button class="btn btn-secondary" @click="showCustomLevels = true" title="我的关卡">
-        <span class="btn-icon">📁</span>
-        我的关卡
-      </button>
-      <button class="btn btn-secondary" @click="resetToInitial" title="返回主菜单">
-        <span class="btn-icon">🏠</span>
-        主菜单
-      </button>
-    </div>
-
     <!-- 方向控制（移动端） -->
     <div class="direction-controls">
       <div class="d-pad">
-        <button class="d-btn d-up" @click="movePlayer(0, -1)">▲</button>
-        <button class="d-btn d-left" @click="movePlayer(-1, 0)">◀</button>
+        <button class="d-btn d-up" @click="movePlayer(0, -1)" @touchstart.prevent="movePlayer(0, -1)">▲</button>
+        <button class="d-btn d-left" @click="movePlayer(-1, 0)" @touchstart.prevent="movePlayer(-1, 0)">◀</button>
         <button class="d-btn d-center" @click="restartLevel">🔄</button>
-        <button class="d-btn d-right" @click="movePlayer(1, 0)">▶</button>
-        <button class="d-btn d-down" @click="movePlayer(0, 1)">▼</button>
+        <button class="d-btn d-right" @click="movePlayer(1, 0)" @touchstart.prevent="movePlayer(1, 0)">▶</button>
+        <button class="d-btn d-down" @click="movePlayer(0, 1)" @touchstart.prevent="movePlayer(0, 1)">▼</button>
       </div>
     </div>
 
@@ -113,9 +90,13 @@
               <span class="win-stat-value">{{ pushes }}</span>
               <span class="win-stat-label">推动次数</span>
             </div>
-            <div class="win-stat" v-if="bestRecords[currentLevel]">
-              <span class="win-stat-value">{{ bestRecords[currentLevel] }}</span>
-              <span class="win-stat-label">最佳记录</span>
+            <div class="win-stat">
+              <span class="win-stat-value">{{ formattedTime }}</span>
+              <span class="win-stat-label">用时</span>
+            </div>
+            <div class="win-stat" v-if="!isPlayingCustom && bestRecords[currentLevel]">
+              <span class="win-stat-value" :class="{ 'new-record': isNewRecord }">{{ bestRecords[currentLevel] }}</span>
+              <span class="win-stat-label">{{ isNewRecord ? '🏆 新纪录！' : '最佳记录' }}</span>
             </div>
           </div>
           <div class="win-actions">
@@ -125,9 +106,16 @@
             <button
               class="btn btn-primary"
               @click="nextLevel"
-              v-if="currentLevel < totalLevels - 1"
+              v-if="!isPlayingCustom && currentLevel < totalLevels - 1"
             >
               下一关 →
+            </button>
+            <button
+              class="btn btn-primary"
+              @click="showWin = false; isWin = false"
+              v-if="isPlayingCustom"
+            >
+              确定
             </button>
           </div>
         </div>
@@ -139,7 +127,7 @@
       <div v-if="showLevelSelect" class="overlay" @click.self="showLevelSelect = false">
         <div class="level-select-modal">
           <div class="modal-header">
-            <h2>选择关卡</h2>
+            <h2>选择关卡 ({{ unlockedLevels }}/{{ totalLevels }} 已解锁)</h2>
             <button class="close-btn" @click="showLevelSelect = false">✕</button>
           </div>
           <div class="level-grid">
@@ -170,47 +158,41 @@
       <div v-if="showTutorial && !isWin" class="overlay">
         <div class="tutorial-modal">
           <div class="tutorial-header">
-            <span class="tutorial-icon">▲</span>
-            <h2>推箱子</h2>
+            <h2>🎮 推箱子</h2>
+            <p class="tutorial-sub">Sokoban</p>
           </div>
-          <div class="tutorial-content">
-            <div class="tutorial-item">
-              <span class="tutorial-symbol player-icon">👷</span>
-              <span class="tutorial-text">这是你，推动箱子到目标点</span>
+
+          <div class="tutorial-grid">
+            <div class="tutorial-card">
+              <span class="card-emoji">👷</span>
+              <span class="card-text">你</span>
+              <span class="card-desc">推动箱子到目标</span>
             </div>
-            <div class="tutorial-item">
-              <span class="tutorial-symbol box-icon">📦</span>
-              <span class="tutorial-text">箱子，需要推到目标点</span>
+            <div class="tutorial-card">
+              <span class="card-emoji">📦</span>
+              <span class="card-text">箱子</span>
+              <span class="card-desc">推到 ○ 处</span>
             </div>
-            <div class="tutorial-item">
-              <span class="tutorial-symbol target-icon">○</span>
-              <span class="tutorial-text">目标点，箱子需要放这里</span>
+            <div class="tutorial-card">
+              <span class="card-emoji">○</span>
+              <span class="card-text" style="color:#64ffda">目标点</span>
+              <span class="card-desc">箱子的终点</span>
             </div>
-            <div class="tutorial-item">
-              <span class="tutorial-symbol complete-icon">📦</span>
-              <span class="tutorial-text">箱子已在目标点上</span>
-            </div>
-            <div class="tutorial-keys">
-              <h3>操作方式</h3>
-              <div class="key-group">
-                <span class="key">↑↓←→</span>
-                <span class="key-desc">方向键移动</span>
-              </div>
-              <div class="key-group">
-                <span class="key">WASD</span>
-                <span class="key-desc">字母键移动</span>
-              </div>
-              <div class="key-group">
-                <span class="key">Ctrl+Z</span>
-                <span class="key-desc">撤销</span>
-              </div>
-              <div class="key-group">
-                <span class="key">R</span>
-                <span class="key-desc">重新开始</span>
-              </div>
+            <div class="tutorial-card">
+              <span class="card-emoji">✅</span>
+              <span class="card-text" style="color:#48bb78">完成</span>
+              <span class="card-desc">箱子在目标上</span>
             </div>
           </div>
-          <button class="btn btn-primary btn-large center" @click="showTutorial = false">
+
+          <div class="tutorial-keys-row">
+            <div class="key-chip"><kbd>↑↓←→</kbd> 移动</div>
+            <div class="key-chip"><kbd>WASD</kbd> 移动</div>
+            <div class="key-chip"><kbd>Ctrl+Z</kbd> 撤销</div>
+            <div class="key-chip"><kbd>R</kbd> 重置</div>
+          </div>
+
+          <button class="btn btn-primary btn-large tutorial-start" @click="startGame">
             开始游戏
           </button>
         </div>
@@ -226,44 +208,50 @@
             <button class="close-btn" @click="showLevelEditor = false">✕</button>
           </div>
           <div class="editor-content">
-            <div class="editor-tools">
-              <span class="tool-label">选择元素：</span>
-              <div class="tool-buttons">
-                <button
-                  v-for="tool in editorTools"
-                  :key="tool.type"
-                  class="tool-btn"
-                  :class="{ active: selectedTool === tool.type }"
-                  @click="selectedTool = tool.type"
-                  :title="tool.name"
-                >
-                  {{ tool.symbol }}
-                </button>
+            <div class="editor-toolbar">
+              <div class="tool-group">
+                <span class="tool-label">元素</span>
+                <div class="tool-buttons">
+                  <button
+                    v-for="tool in editorTools"
+                    :key="tool.type"
+                    class="tool-btn"
+                    :class="{ active: selectedTool === tool.type }"
+                    @click="selectedTool = tool.type"
+                    :title="tool.name"
+                  >
+                    {{ tool.symbol }}
+                  </button>
+                </div>
+              </div>
+              <div class="editor-divider"></div>
+              <div class="editor-row">
+                <label>大小</label>
+                <select v-model="editorHeight">
+                  <option v-for="h in [5,6,7,8,9,10,11,12]" :key="h" :value="h">{{ h }}行</option>
+                </select>
+                <span style="color:#5a6a7a">×</span>
+                <select v-model="editorWidth">
+                  <option v-for="w in [5,6,7,8,9,10,11,12]" :key="w" :value="w">{{ w }}列</option>
+                </select>
+                <button class="btn btn-secondary btn-sm" @click="initEditorMap">应用</button>
+              </div>
+              <div class="editor-divider"></div>
+              <div class="editor-row">
+                <label>名称</label>
+                <input type="text" v-model="customLevelName" placeholder="关卡名称" maxlength="10">
               </div>
             </div>
-            <div class="editor-size">
-              <label>地图大小：</label>
-              <select v-model="editorHeight">
-                <option v-for="h in [5,6,7,8,9,10]" :key="h" :value="h">{{ h }}行</option>
-              </select>
-              ×
-              <select v-model="editorWidth">
-                <option v-for="w in [5,6,7,8,9,10,11,12]" :key="w" :value="w">{{ w }}列</option>
-              </select>
-            </div>
-            <div class="editor-name">
-              <label>关卡名称：</label>
-              <input type="text" v-model="customLevelName" placeholder="输入关卡名称" maxlength="10">
-            </div>
             <div class="editor-map">
-              <div class="map" :style="editorMapStyle">
+              <div class="map editor-grid" :style="editorMapStyle">
                 <div v-for="(row, y) in editorMap" :key="'edit-row-' + y" class="row">
                   <div
                     v-for="(cell, x) in row"
                     :key="'edit-cell-' + y + '-' + x"
                     :class="getEditorCellClass(cell)"
-                    @click="paintCell(y, x)"
-                    @mouseenter="paintCell(y, x, true)"
+                    @mousedown.prevent="startPaint(y, x)"
+                    @mouseenter="dragPaint(y, x)"
+                    @touchstart.prevent="startPaint(y, x)"
                   >
                     <span class="cell-content">{{ getEditorCellContent(cell) }}</span>
                   </div>
@@ -288,7 +276,7 @@
       <div v-if="showCustomLevels" class="overlay" @click.self="showCustomLevels = false">
         <div class="level-select-modal">
           <div class="modal-header">
-            <h2>我的关卡</h2>
+            <h2>我的关卡 ({{ customLevels.length }})</h2>
             <button class="close-btn" @click="showCustomLevels = false">✕</button>
           </div>
           <div class="level-grid" v-if="customLevels.length > 0">
@@ -314,13 +302,40 @@
 
     <!-- 页脚 -->
     <footer class="game-footer">
-      <p>按 ESC 打开关卡选择 | 按 R 重新开始</p>
+      <div class="toolbar">
+        <button class="toolbar-btn" @click="undo" :disabled="!canUndo" title="撤销 (Ctrl+Z)">
+          <span class="toolbar-icon">↩</span>
+          <span class="toolbar-label">撤销</span>
+          <span v-if="undoCount > 0" class="toolbar-badge">{{ undoCount }}</span>
+        </button>
+        <button class="toolbar-btn" @click="restartLevel" title="重新开始 (R)">
+          <span class="toolbar-icon">⟳</span>
+          <span class="toolbar-label">重置</span>
+        </button>
+        <button class="toolbar-btn toolbar-btn-primary" @click="showLevelSelect = true" title="关卡选择 (Esc)">
+          <span class="toolbar-icon">☰</span>
+          <span class="toolbar-label">关卡</span>
+        </button>
+        <button class="toolbar-btn" @click="openEditor" title="自定义关卡">
+          <span class="toolbar-icon">✚</span>
+          <span class="toolbar-label">自定义</span>
+        </button>
+        <button class="toolbar-btn" @click="showCustomLevels = true" title="我的关卡">
+          <span class="toolbar-icon">📁</span>
+          <span class="toolbar-label">我的</span>
+        </button>
+        <button class="toolbar-btn" @click="resetToInitial" title="返回主菜单">
+          <span class="toolbar-icon">🏠</span>
+          <span class="toolbar-label">菜单</span>
+        </button>
+      </div>
+      <p class="footer-hint">ESC 关卡 | R 重置 | Ctrl+Z 撤销</p>
     </footer>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { levels, CELL_TYPES } from './levels.js'
 
 // 游戏状态
@@ -335,10 +350,37 @@ const showLevelSelect = ref(false)
 const showTutorial = ref(true)
 const showLevelEditor = ref(false)
 const showCustomLevels = ref(false)
+const showWin = ref(false)
 const history = ref([])
-const animatingCells = ref(new Set())
+const animatingCells = reactive(new Set())
 const message = ref('')
 const showMessage = ref(false)
+const isNewRecord = ref(false)
+
+// 计时器
+const elapsedTime = ref(0)
+let timerInterval = null
+
+const formattedTime = computed(() => {
+  const m = Math.floor(elapsedTime.value / 60)
+  const s = elapsedTime.value % 60
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+})
+
+const startTimer = () => {
+  stopTimer()
+  elapsedTime.value = 0
+  timerInterval = setInterval(() => {
+    elapsedTime.value++
+  }, 1000)
+}
+
+const stopTimer = () => {
+  if (timerInterval) {
+    clearInterval(timerInterval)
+    timerInterval = null
+  }
+}
 
 // 关卡编辑器状态
 const editorWidth = ref(8)
@@ -347,7 +389,7 @@ const editorMap = ref([])
 const selectedTool = ref(CELL_TYPES.WALL)
 const customLevelName = ref('')
 const editorError = ref('')
-const isMouseDown = ref(false)
+const isPainting = ref(false)
 const isPlayingCustom = ref(false)
 const customLevelIndex = ref(-1)
 
@@ -372,55 +414,80 @@ const customLevels = ref(JSON.parse(localStorage.getItem('sokoban_custom_levels'
 // 计算属性
 const currentLevelData = computed(() => levels[currentLevel.value])
 const totalLevels = computed(() => levels.length)
+const canUndo = computed(() => history.value.length > 0)
+const undoCount = computed(() => history.value.length)
+
 const boxCount = computed(() => {
   let count = 0
-  gameMap.value.forEach(row => {
-    row.forEach(cell => {
-      if (cell === CELL_TYPES.BOX || cell === CELL_TYPES.BOX_ON_TARGET) count++
-    })
-  })
+  const map = gameMap.value
+  for (let y = 0; y < map.length; y++) {
+    const row = map[y]
+    for (let x = 0; x < row.length; x++) {
+      if (row[x] === CELL_TYPES.BOX || row[x] === CELL_TYPES.BOX_ON_TARGET) count++
+    }
+  }
   return count
 })
 
 const boxesOnTarget = computed(() => {
   let count = 0
-  gameMap.value.forEach(row => {
-    row.forEach(cell => {
-      if (cell === CELL_TYPES.BOX_ON_TARGET) count++
-    })
-  })
+  const map = gameMap.value
+  for (let y = 0; y < map.length; y++) {
+    const row = map[y]
+    for (let x = 0; x < row.length; x++) {
+      if (row[x] === CELL_TYPES.BOX_ON_TARGET) count++
+    }
+  }
   return count
 })
 
 const mapStyle = computed(() => {
-  if (gameMap.value.length === 0) return {}
-  const cols = gameMap.value[0].length
+  const map = gameMap.value
+  if (map.length === 0) return {}
+  const cols = map[0].length
   return {
     gridTemplateColumns: `repeat(${cols}, 1fr)`,
-    maxWidth: `${cols * 50 + 20}px`
+    maxWidth: `${cols * 47 + 20}px`
   }
 })
 
-// 编辑器地图样式
-const editorMapStyle = computed(() => {
-  return {
-    gridTemplateColumns: `repeat(${editorWidth.value}, 1fr)`,
-    maxWidth: `${editorWidth.value * 50 + 20}px`
-  }
-})
+const editorMapStyle = computed(() => ({
+  gridTemplateColumns: `repeat(${editorWidth.value}, 1fr)`,
+  maxWidth: `${editorWidth.value * 47 + 20}px`
+}))
 
-// 检查周围是否有非空格子
-const hasNonZeroNeighbor = (y, x) => {
+// 预计算可见单元格（哪些 void 格子需要渲染）
+const visibleCells = computed(() => {
   const map = gameMap.value
-  const directions = [[-1, 0], [1, 0], [0, -1], [0, 1]]
-  for (const [dy, dx] of directions) {
-    const ny = y + dy
-    const nx = x + dx
-    if (ny >= 0 && ny < map.length && nx >= 0 && nx < map[ny].length) {
-      if (map[ny][nx] !== 0) return true
+  if (map.length === 0) return []
+  const result = []
+  for (let y = 0; y < map.length; y++) {
+    result[y] = []
+    for (let x = 0; x < map[y].length; x++) {
+      if (map[y][x] !== 0) {
+        result[y][x] = true
+        continue
+      }
+      // 检查四周是否有非零格子
+      let hasNeighbor = false
+      const dirs = [[-1,0],[1,0],[0,-1],[0,1]]
+      for (const [dy, dx] of dirs) {
+        const ny = y + dy, nx = x + dx
+        if (ny >= 0 && ny < map.length && nx >= 0 && nx < map[ny].length && map[ny][nx] !== 0) {
+          hasNeighbor = true
+          break
+        }
+      }
+      result[y][x] = hasNeighbor
     }
   }
-  return false
+  return result
+})
+
+// 开始游戏（从教程进入）
+const startGame = () => {
+  showTutorial.value = false
+  initLevel(currentLevel.value)
 }
 
 // 初始化编辑器地图
@@ -429,7 +496,6 @@ const initEditorMap = () => {
   for (let y = 0; y < editorHeight.value; y++) {
     const row = []
     for (let x = 0; x < editorWidth.value; x++) {
-      // 默认边缘是墙，中间是空地
       if (y === 0 || y === editorHeight.value - 1 || x === 0 || x === editorWidth.value - 1) {
         row.push(CELL_TYPES.WALL)
       } else {
@@ -442,99 +508,74 @@ const initEditorMap = () => {
   editorError.value = ''
 }
 
-// 绘制格子
-const paintCell = (y, x, isDrag = false) => {
-  if (isDrag && !isMouseDown.value) return
+// 编辑器绘制
+const startPaint = (y, x) => {
+  isPainting.value = true
+  paintCell(y, x)
+}
 
-  // 如果放置玩家，先移除现有玩家
+const dragPaint = (y, x) => {
+  if (isPainting.value) {
+    paintCell(y, x)
+  }
+}
+
+const paintCell = (y, x) => {
   if (selectedTool.value === CELL_TYPES.PLAYER) {
     for (let row of editorMap.value) {
       for (let i = 0; i < row.length; i++) {
-        if (row[i] === CELL_TYPES.PLAYER) {
+        if (row[i] === CELL_TYPES.PLAYER || row[i] === CELL_TYPES.PLAYER_ON_TARGET) {
           row[i] = CELL_TYPES.EMPTY
         }
       }
     }
   }
 
-  // 如果放置箱子到目标点
   if (selectedTool.value === CELL_TYPES.BOX && editorMap.value[y][x] === CELL_TYPES.TARGET) {
     editorMap.value[y][x] = CELL_TYPES.BOX_ON_TARGET
-  }
-  // 如果放置目标点且上面有箱子
-  else if (selectedTool.value === CELL_TYPES.TARGET && editorMap.value[y][x] === CELL_TYPES.BOX) {
+  } else if (selectedTool.value === CELL_TYPES.TARGET && editorMap.value[y][x] === CELL_TYPES.BOX) {
     editorMap.value[y][x] = CELL_TYPES.BOX_ON_TARGET
-  }
-  // 如果放置玩家到目标点
-  else if (selectedTool.value === CELL_TYPES.PLAYER && editorMap.value[y][x] === CELL_TYPES.TARGET) {
+  } else if (selectedTool.value === CELL_TYPES.PLAYER && editorMap.value[y][x] === CELL_TYPES.TARGET) {
     editorMap.value[y][x] = CELL_TYPES.PLAYER_ON_TARGET
-  }
-  else {
+  } else {
     editorMap.value[y][x] = selectedTool.value
   }
 
   editorError.value = ''
 }
 
-// 清空编辑器
 const clearEditor = () => {
   initEditorMap()
   customLevelName.value = ''
 }
 
-// 获取编辑器格子类名
 const getEditorCellClass = (cell) => {
   const classes = ['cell']
   switch (cell) {
-    case CELL_TYPES.WALL:
-      classes.push('wall')
-      break
-    case CELL_TYPES.TARGET:
-      classes.push('target')
-      break
-    case CELL_TYPES.BOX:
-      classes.push('box')
-      break
-    case CELL_TYPES.BOX_ON_TARGET:
-      classes.push('box', 'on-target')
-      break
-    case CELL_TYPES.PLAYER:
-      classes.push('player')
-      break
-    case CELL_TYPES.PLAYER_ON_TARGET:
-      classes.push('player', 'on-target')
-      break
-    default:
-      classes.push('empty')
+    case CELL_TYPES.WALL: classes.push('wall'); break
+    case CELL_TYPES.TARGET: classes.push('target'); break
+    case CELL_TYPES.BOX: classes.push('box'); break
+    case CELL_TYPES.BOX_ON_TARGET: classes.push('box', 'on-target'); break
+    case CELL_TYPES.PLAYER: classes.push('player'); break
+    case CELL_TYPES.PLAYER_ON_TARGET: classes.push('player', 'on-target'); break
+    default: classes.push('empty')
   }
   return classes
 }
 
-// 获取编辑器格子内容
 const getEditorCellContent = (cell) => {
   switch (cell) {
-    case CELL_TYPES.WALL:
-      return ''
-    case CELL_TYPES.TARGET:
-      return '○'
+    case CELL_TYPES.TARGET: return '○'
     case CELL_TYPES.BOX:
-      return '📦'
-    case CELL_TYPES.BOX_ON_TARGET:
-      return '📦'
+    case CELL_TYPES.BOX_ON_TARGET: return '📦'
     case CELL_TYPES.PLAYER:
-    case CELL_TYPES.PLAYER_ON_TARGET:
-      return '👷'
-    default:
-      return '·'
+    case CELL_TYPES.PLAYER_ON_TARGET: return '👷'
+    default: return ''
   }
 }
 
-// 验证关卡
 const validateLevel = () => {
-  let playerCount = 0
-  let boxCount = 0
-  let targetCount = 0
-
+  let playerCount = 0, boxCount = 0, targetCount = 0
   for (let row of editorMap.value) {
     for (let cell of row) {
       if (cell === CELL_TYPES.PLAYER || cell === CELL_TYPES.PLAYER_ON_TARGET) playerCount++
@@ -542,78 +583,47 @@ const validateLevel = () => {
       if (cell === CELL_TYPES.TARGET || cell === CELL_TYPES.BOX_ON_TARGET || cell === CELL_TYPES.PLAYER_ON_TARGET) targetCount++
     }
   }
-
-  if (playerCount !== 1) {
-    return '必须且只能有一个玩家'
-  }
-  if (boxCount === 0) {
-    return '至少需要一个箱子'
-  }
-  if (targetCount === 0) {
-    return '至少需要一个目标点'
-  }
-  if (boxCount !== targetCount) {
-    return `箱子数量(${boxCount})必须等于目标点数量(${targetCount})`
-  }
-
+  if (playerCount !== 1) return '必须且只能有一个玩家'
+  if (boxCount === 0) return '至少需要一个箱子'
+  if (targetCount === 0) return '至少需要一个目标点'
+  if (boxCount !== targetCount) return `箱子数量(${boxCount})必须等于目标点数量(${targetCount})`
   return null
 }
 
-// 保存自定义关卡
 const saveCustomLevel = () => {
   const error = validateLevel()
-  if (error) {
-    editorError.value = error
-    return
-  }
-
+  if (error) { editorError.value = error; return }
   const newLevel = {
     name: customLevelName.value || `关卡${customLevels.value.length + 1}`,
     map: editorMap.value.map(row => [...row])
   }
-
   customLevels.value.push(newLevel)
   localStorage.setItem('sokoban_custom_levels', JSON.stringify(customLevels.value))
-
   showLevelEditor.value = false
   showGameMessage('关卡已保存！')
 }
 
-// 删除自定义关卡
 const deleteCustomLevel = (index) => {
   customLevels.value.splice(index, 1)
   localStorage.setItem('sokoban_custom_levels', JSON.stringify(customLevels.value))
 }
 
-// 游玩自定义关卡
 const playCustomLevel = (index) => {
   isPlayingCustom.value = true
   customLevelIndex.value = index
-  const level = customLevels.value[index]
-  gameMap.value = level.map.map(row => [...row])
-  moves.value = 0
-  pushes.value = 0
-  isWin.value = false
-  history.value = []
-  isPlaying.value = true
-
-  // 找到玩家位置
-  for (let y = 0; y < gameMap.value.length; y++) {
-    for (let x = 0; x < gameMap.value[y].length; x++) {
-      if (gameMap.value[y][x] === CELL_TYPES.PLAYER || gameMap.value[y][x] === CELL_TYPES.PLAYER_ON_TARGET) {
-        playerPos.x = x
-        playerPos.y = y
-      }
-    }
-  }
-
+  loadMap(customLevels.value[index].map)
   showCustomLevels.value = false
+  startTimer()
 }
 
-// 加载随机模板
+const openEditor = () => {
+  showLevelEditor.value = true
+  editorError.value = ''
+  initEditorMap()
+}
+
 const loadRandomTemplate = () => {
   const templates = [
-    // 简单关卡模板
     {
       name: '简单房间',
       map: [
@@ -625,7 +635,6 @@ const loadRandomTemplate = () => {
         [1,1,1,1,1,1,1]
       ]
     },
-    // 双箱关卡模板
     {
       name: '双箱挑战',
       map: [
@@ -637,7 +646,6 @@ const loadRandomTemplate = () => {
         [1,1,1,1,1,1,1,1]
       ]
     },
-    // L形关卡模板
     {
       name: 'L形走廊',
       map: [
@@ -650,7 +658,6 @@ const loadRandomTemplate = () => {
       ]
     }
   ]
-
   const template = templates[Math.floor(Math.random() * templates.length)]
   editorHeight.value = template.map.length
   editorWidth.value = template.map[0].length
@@ -659,21 +666,20 @@ const loadRandomTemplate = () => {
   editorError.value = ''
 }
 
-// 初始化关卡
-const initLevel = (levelIndex) => {
-  currentLevel.value = levelIndex
-  const level = levels[levelIndex]
-  gameMap.value = level.map.map(row => [...row])
+// 加载地图到游戏
+const loadMap = (mapData) => {
+  gameMap.value = mapData.map(row => [...row])
   moves.value = 0
   pushes.value = 0
   isWin.value = false
   history.value = []
   isPlaying.value = true
+  isNewRecord.value = false
 
-  // 找到玩家位置
   for (let y = 0; y < gameMap.value.length; y++) {
     for (let x = 0; x < gameMap.value[y].length; x++) {
-      if (gameMap.value[y][x] === CELL_TYPES.PLAYER || gameMap.value[y][x] === CELL_TYPES.PLAYER_ON_TARGET) {
+      const cell = gameMap.value[y][x]
+      if (cell === CELL_TYPES.PLAYER || cell === CELL_TYPES.PLAYER_ON_TARGET) {
         playerPos.x = x
         playerPos.y = y
       }
@@ -681,16 +687,24 @@ const initLevel = (levelIndex) => {
   }
 }
 
+// 初始化关卡
+const initLevel = (levelIndex) => {
+  currentLevel.value = levelIndex
+  isPlayingCustom.value = false
+  customLevelIndex.value = -1
+  loadMap(levels[levelIndex].map)
+  startTimer()
+}
+
 // 保存状态到历史
 const saveState = () => {
   history.value.push({
     map: gameMap.value.map(row => [...row]),
-    playerPos: { ...playerPos },
+    playerPos: { x: playerPos.x, y: playerPos.y },
     moves: moves.value,
     pushes: pushes.value
   })
-  // 限制历史记录数量
-  if (history.value.length > 100) {
+  if (history.value.length > 200) {
     history.value.shift()
   }
 }
@@ -698,25 +712,28 @@ const saveState = () => {
 // 撤销
 const undo = () => {
   if (history.value.length === 0) return
-
   const state = history.value.pop()
   gameMap.value = state.map
   playerPos.x = state.playerPos.x
   playerPos.y = state.playerPos.y
   moves.value = state.moves
   pushes.value = state.pushes
+  isWin.value = false
 }
 
 // 重置到初始状态
 const resetToInitial = () => {
-  currentLevel.value = 0
-  initLevel(0)
+  stopTimer()
+  isPlaying.value = false
   showTutorial.value = true
   isPlayingCustom.value = false
   customLevelIndex.value = -1
   showLevelSelect.value = false
   showLevelEditor.value = false
   showCustomLevels.value = false
+  isWin.value = false
+  currentLevel.value = 0
+  gameMap.value = []
   showGameMessage('已返回主菜单')
 }
 
@@ -724,87 +741,56 @@ const resetToInitial = () => {
 const showGameMessage = (msg) => {
   message.value = msg
   showMessage.value = true
-  setTimeout(() => {
-    showMessage.value = false
-  }, 1500)
+  setTimeout(() => { showMessage.value = false }, 1500)
+}
+
+// 添加动画
+const addAnimation = (y, x, duration = 150) => {
+  const key = `${y}-${x}`
+  animatingCells.add(key)
+  setTimeout(() => { animatingCells.delete(key) }, duration)
 }
 
 // 移动玩家
 const movePlayer = (dx, dy) => {
-  if (isWin.value) return
+  if (isWin.value || !isPlaying.value) return
 
   const newX = playerPos.x + dx
   const newY = playerPos.y + dy
 
-  // 检查边界
-  if (newY < 0 || newY >= gameMap.value.length || newX < 0 || newX >= gameMap.value[newY].length) {
-    return
-  }
+  if (newY < 0 || newY >= gameMap.value.length || newX < 0 || newX >= gameMap.value[newY].length) return
 
   const targetCell = gameMap.value[newY][newX]
 
-  // 撞墙
-  if (targetCell === CELL_TYPES.WALL) {
-    return
-  }
+  if (targetCell === CELL_TYPES.WALL) return
 
-  // 添加动画
-  const animKey = `${newY}-${newX}`
-  animatingCells.value.add(animKey)
+  addAnimation(newY, newX)
 
-  setTimeout(() => {
-    animatingCells.value.delete(animKey)
-  }, 150)
-
-  // 空地或目标点
   if (targetCell === CELL_TYPES.EMPTY || targetCell === CELL_TYPES.TARGET) {
     saveState()
-
-    // 更新原位置
     const oldCell = gameMap.value[playerPos.y][playerPos.x]
     gameMap.value[playerPos.y][playerPos.x] = oldCell === CELL_TYPES.PLAYER_ON_TARGET ? CELL_TYPES.TARGET : CELL_TYPES.EMPTY
-
-    // 更新新位置
     gameMap.value[newY][newX] = targetCell === CELL_TYPES.TARGET ? CELL_TYPES.PLAYER_ON_TARGET : CELL_TYPES.PLAYER
-
     playerPos.x = newX
     playerPos.y = newY
     moves.value++
-  }
-  // 推箱子
-  else if (targetCell === CELL_TYPES.BOX || targetCell === CELL_TYPES.BOX_ON_TARGET) {
+  } else if (targetCell === CELL_TYPES.BOX || targetCell === CELL_TYPES.BOX_ON_TARGET) {
     const boxNewX = newX + dx
     const boxNewY = newY + dy
 
-    // 检查箱子移动目标
-    if (boxNewY < 0 || boxNewY >= gameMap.value.length || boxNewX < 0 || boxNewX >= gameMap.value[boxNewY].length) {
-      return
-    }
+    if (boxNewY < 0 || boxNewY >= gameMap.value.length || boxNewX < 0 || boxNewX >= gameMap.value[boxNewY].length) return
 
     const boxTargetCell = gameMap.value[boxNewY][boxNewX]
 
-    // 箱子不能推到墙或另一个箱子
-    if (boxTargetCell === CELL_TYPES.WALL || boxTargetCell === CELL_TYPES.BOX || boxTargetCell === CELL_TYPES.BOX_ON_TARGET) {
-      return
-    }
+    if (boxTargetCell === CELL_TYPES.WALL || boxTargetCell === CELL_TYPES.BOX || boxTargetCell === CELL_TYPES.BOX_ON_TARGET) return
 
     saveState()
+    addAnimation(boxNewY, boxNewX)
 
-    // 添加箱子动画
-    const boxAnimKey = `${boxNewY}-${boxNewX}`
-    animatingCells.value.add(boxAnimKey)
-    setTimeout(() => {
-      animatingCells.value.delete(boxAnimKey)
-    }, 150)
-
-    // 更新原位置
     const oldCell = gameMap.value[playerPos.y][playerPos.x]
     gameMap.value[playerPos.y][playerPos.x] = oldCell === CELL_TYPES.PLAYER_ON_TARGET ? CELL_TYPES.TARGET : CELL_TYPES.EMPTY
 
-    // 更新玩家新位置
     gameMap.value[newY][newX] = targetCell === CELL_TYPES.BOX_ON_TARGET ? CELL_TYPES.PLAYER_ON_TARGET : CELL_TYPES.PLAYER
-
-    // 更新箱子新位置
     gameMap.value[boxNewY][boxNewX] = boxTargetCell === CELL_TYPES.TARGET ? CELL_TYPES.BOX_ON_TARGET : CELL_TYPES.BOX
 
     playerPos.x = newX
@@ -812,48 +798,52 @@ const movePlayer = (dx, dy) => {
     moves.value++
     pushes.value++
 
-    // 检查胜利
     checkWin()
   }
 }
 
 // 检查胜利条件
 const checkWin = () => {
-  let allBoxesOnTarget = true
-  for (let y = 0; y < gameMap.value.length; y++) {
-    for (let x = 0; x < gameMap.value[y].length; x++) {
-      if (gameMap.value[y][x] === CELL_TYPES.BOX) {
-        allBoxesOnTarget = false
-        break
-      }
+  const map = gameMap.value
+  for (let y = 0; y < map.length; y++) {
+    const row = map[y]
+    for (let x = 0; x < row.length; x++) {
+      if (row[x] === CELL_TYPES.BOX) return
     }
-    if (!allBoxesOnTarget) break
   }
 
-  if (allBoxesOnTarget) {
-    isWin.value = true
+  // 所有箱子都在目标点上
+  isWin.value = true
+  showWin.value = true
+  stopTimer()
 
-    // 如果不是自定义关卡，解锁下一关并保存记录
-    if (!isPlayingCustom.value) {
-      // 解锁下一关
-      if (currentLevel.value + 2 > unlockedLevels.value) {
-        unlockedLevels.value = currentLevel.value + 2
-        localStorage.setItem('sokoban_unlocked', unlockedLevels.value.toString())
-      }
+  if (!isPlayingCustom.value) {
+    // 解锁下一关
+    if (currentLevel.value + 2 > unlockedLevels.value) {
+      unlockedLevels.value = currentLevel.value + 2
+      localStorage.setItem('sokoban_unlocked', unlockedLevels.value.toString())
+    }
 
-      // 保存最佳记录
-      const recordKey = currentLevel.value
-      if (!bestRecords.value[recordKey] || moves.value < bestRecords.value[recordKey]) {
-        bestRecords.value[recordKey] = moves.value
-        localStorage.setItem('sokoban_records', JSON.stringify(bestRecords.value))
-      }
+    // 保存最佳记录
+    const recordKey = currentLevel.value
+    if (!bestRecords.value[recordKey] || moves.value < bestRecords.value[recordKey]) {
+      bestRecords.value[recordKey] = moves.value
+      localStorage.setItem('sokoban_records', JSON.stringify(bestRecords.value))
+      isNewRecord.value = true
+    } else {
+      isNewRecord.value = false
     }
   }
 }
 
 // 重新开始当前关卡
 const restartLevel = () => {
-  initLevel(currentLevel.value)
+  if (isPlayingCustom.value && customLevelIndex.value >= 0) {
+    loadMap(customLevels.value[customLevelIndex.value].map)
+    startTimer()
+  } else {
+    initLevel(currentLevel.value)
+  }
 }
 
 // 选择关卡
@@ -883,72 +873,47 @@ const handleKeydown = (e) => {
   }
 
   if (showTutorial.value) {
-    showTutorial.value = false
+    startGame()
+    return
+  }
+
+  // 关闭胜利弹窗
+  if (isWin.value && e.key === 'Escape') {
+    isWin.value = false
+    showWin.value = false
     return
   }
 
   switch (e.key) {
-    case 'ArrowUp':
-    case 'w':
-    case 'W':
-      e.preventDefault()
-      movePlayer(0, -1)
+    case 'ArrowUp': case 'w': case 'W':
+      e.preventDefault(); movePlayer(0, -1); break
+    case 'ArrowDown': case 's': case 'S':
+      e.preventDefault(); movePlayer(0, 1); break
+    case 'ArrowLeft': case 'a': case 'A':
+      e.preventDefault(); movePlayer(-1, 0); break
+    case 'ArrowRight': case 'd': case 'D':
+      e.preventDefault(); movePlayer(1, 0); break
+    case 'z': case 'Z':
+      if (e.ctrlKey || e.metaKey) { e.preventDefault(); undo() }
       break
-    case 'ArrowDown':
-    case 's':
-    case 'S':
-      e.preventDefault()
-      movePlayer(0, 1)
-      break
-    case 'ArrowLeft':
-    case 'a':
-    case 'A':
-      e.preventDefault()
-      movePlayer(-1, 0)
-      break
-    case 'ArrowRight':
-    case 'd':
-    case 'D':
-      e.preventDefault()
-      movePlayer(1, 0)
-      break
-    case 'z':
-    case 'Z':
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault()
-        undo()
-      }
-      break
-    case 'r':
-    case 'R':
-      restartLevel()
-      break
+    case 'r': case 'R':
+      restartLevel(); break
     case 'Escape':
-      showLevelSelect.value = true
-      break
+      showLevelSelect.value = true; break
   }
 }
 
-// 触摸控制
-let touchStartX = 0
-let touchStartY = 0
-
+// 触摸控制（滑动）
+let touchStartX = 0, touchStartY = 0
 const handleTouchStart = (e) => {
   touchStartX = e.touches[0].clientX
   touchStartY = e.touches[0].clientY
 }
-
 const handleTouchEnd = (e) => {
   if (!isPlaying.value || isWin.value) return
-
-  const touchEndX = e.changedTouches[0].clientX
-  const touchEndY = e.changedTouches[0].clientY
-
-  const dx = touchEndX - touchStartX
-  const dy = touchEndY - touchStartY
-
+  const dx = e.changedTouches[0].clientX - touchStartX
+  const dy = e.changedTouches[0].clientY - touchStartY
   const minSwipe = 30
-
   if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > minSwipe) {
     movePlayer(dx > 0 ? 1 : -1, 0)
   } else if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > minSwipe) {
@@ -956,57 +921,36 @@ const handleTouchEnd = (e) => {
   }
 }
 
+// 鼠标事件（编辑器绘制）
+const handleMouseDown = () => { isPainting.value = true }
+const handleMouseUp = () => { isPainting.value = false }
+
 // 获取单元格类名
 const getCellClass = (cell, y, x) => {
   const classes = ['cell']
-
-  const animKey = `${y}-${x}`
-  if (animatingCells.value.has(animKey)) {
-    classes.push('animating')
-  }
-
+  const key = `${y}-${x}`
+  if (animatingCells.has(key)) classes.push('animating')
   switch (cell) {
-    case CELL_TYPES.WALL:
-      classes.push('wall')
-      break
-    case CELL_TYPES.TARGET:
-      classes.push('target')
-      break
-    case CELL_TYPES.BOX:
-      classes.push('box')
-      break
-    case CELL_TYPES.BOX_ON_TARGET:
-      classes.push('box', 'on-target')
-      break
-    case CELL_TYPES.PLAYER:
-      classes.push('player')
-      break
-    case CELL_TYPES.PLAYER_ON_TARGET:
-      classes.push('player', 'on-target')
-      break
-    default:
-      classes.push('empty')
+    case CELL_TYPES.WALL: classes.push('wall'); break
+    case CELL_TYPES.TARGET: classes.push('target'); break
+    case CELL_TYPES.BOX: classes.push('box'); break
+    case CELL_TYPES.BOX_ON_TARGET: classes.push('box', 'on-target'); break
+    case CELL_TYPES.PLAYER: classes.push('player'); break
+    case CELL_TYPES.PLAYER_ON_TARGET: classes.push('player', 'on-target'); break
+    default: classes.push('empty')
   }
-
   return classes
 }
 
 // 获取单元格内容
 const getCellContent = (cell) => {
   switch (cell) {
-    case CELL_TYPES.WALL:
-      return ''
-    case CELL_TYPES.TARGET:
-      return '○'
-    case CELL_TYPES.BOX:
-      return '📦'
-    case CELL_TYPES.BOX_ON_TARGET:
-      return '📦'
+    case CELL_TYPES.TARGET: return '○'
+    case CELL_TYPES.BOX: return '📦'
+    case CELL_TYPES.BOX_ON_TARGET: return '📦'
     case CELL_TYPES.PLAYER:
-    case CELL_TYPES.PLAYER_ON_TARGET:
-      return '👷'
-    default:
-      return ''
+    case CELL_TYPES.PLAYER_ON_TARGET: return '👷'
+    default: return ''
   }
 }
 
@@ -1015,8 +959,8 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
   document.addEventListener('touchstart', handleTouchStart, { passive: true })
   document.addEventListener('touchend', handleTouchEnd, { passive: true })
-  document.addEventListener('mousedown', () => isMouseDown.value = true)
-  document.addEventListener('mouseup', () => isMouseDown.value = false)
+  document.addEventListener('mousedown', handleMouseDown)
+  document.addEventListener('mouseup', handleMouseUp)
   initLevel(0)
   initEditorMap()
 })
@@ -1025,8 +969,9 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
   document.removeEventListener('touchstart', handleTouchStart)
   document.removeEventListener('touchend', handleTouchEnd)
-  document.removeEventListener('mousedown', () => isMouseDown.value = true)
-  document.removeEventListener('mouseup', () => isMouseDown.value = false)
+  document.removeEventListener('mousedown', handleMouseDown)
+  document.removeEventListener('mouseup', handleMouseUp)
+  stopTimer()
 })
 </script>
 
